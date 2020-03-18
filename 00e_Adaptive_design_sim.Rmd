@@ -1,0 +1,122 @@
+---
+title: "AED Sim"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+header-includes: \usepackage{docmute,amsmath}
+---
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE,results='hide'}
+knitr::opts_chunk$set(results='asis', echo = TRUE)
+
+```
+
+```{r,message=FALSE,warning=FALSE}
+library(knitr)
+source("01_AdaptiveTrialDesign.r")
+
+# thresholds for utility assessments and population selection based on observed pCR difference between active vs. control arms in the biomarker positive group (S) and its complement (C)
+d_S0_C0 <- rbind(c('d_S0'=.12, 'd_C0'=.1), 
+                 c(.15, .12))
+
+n_2  <- 60    # number of patient at satge 2 for one arm (rr=1:1)
+cli_S0 <- .15 # bar for clin significance at read out for S
+cli_F0 <- .15 # bar for clin significance at read out for F
+
+prev_S <- .47 # prevalence of biomarker positive patients
+
+# true difference in pCR between active vs. control arms in the biomarker positive group (S) and its complement (C)
+delta_C_S <- rbind(c('delta_S'=0.2, 'delta_C'=0.2), 
+                   c(0.2, 0.12),
+                   c(0.2, 0.04))
+rownames(delta_C_S) <- c('Scen_1', 'Scen_2', 'Scen_3')
+
+```
+
+
+```{r,message=FALSE,warning=FALSE}
+set.seed(35)
+B <- 1e5#4e4
+
+if (!file.exists('simres.rdata')) {
+  res <- list()
+  id <- 1
+  for (id1 in 1:nrow(d_S0_C0)) {
+    d_S0 <- d_S0_C0[id1, 1]
+    d_C0 <- d_S0_C0[id1, 2]
+    
+    for (r_id in 1:nrow(delta_C_S)) {
+      delta_S <- delta_C_S[r_id, 1]
+      delta_C <- delta_C_S[r_id, 2]
+
+      set.seed(35)
+      # by default the sample size for each arm (RR=1:1) in stage 1 is 102
+      res[[id]] <- AdaptiveTrialDesign(delta_S=delta_S, delta_C=delta_C, 
+                                       d_S = d_S0, d_C=d_C0, nSimul = B, 
+                                       cli_rev_S = cli_S0, cli_rev_F=cli_F0, n_2=n_2)
+      attr(res[[id]], 'delta_S') <- delta_S
+      attr(res[[id]], 'delta_C') <- delta_C
+      attr(res[[id]], 'd_S0') <- d_S0
+      attr(res[[id]], 'd_C0') <- d_C0
+      
+      id <- id+1
+    } # end of for (r_id in 1:nrow(deta_C_S))    
+  } # end of for (id1 in 1:nrow(d_S0_C0))
+
+  save(res, file = 'simres.rdata')
+} else {
+  load('simres.rdata')
+}
+```
+
+```{r,message=F,warning=F}
+out_tab <- list()
+
+for (r_id in 1:length(res)) {
+  out_tab[[r_id]] <- list()
+  
+  delta_S <- attr(res[[r_id]], 'delta_S')
+  delta_C <- attr(res[[r_id]], 'delta_C')
+  
+  d_S0 <- attr(res[[r_id]], 'd_S0')
+  d_C0 <- attr(res[[r_id]], 'd_C0')
+
+  tmp <- res[[r_id]]
+  
+  cat('\n\n')
+  cat(paste0('### Protocol assumptions:', ' $\\Delta_S=', delta_S, 
+             '$, $\\Delta_{S^c}=', delta_C, '$', ' $d_S=', d_S0, 
+             '$, $d_C=', d_C0, '$'))
+  cat('\n\n')
+  
+  ### Decision frequency
+  out_tab[[r_id]]$dec_freq_tab <- dec_freq_tab <- prop.table(table(tmp$stage1_decision_detail))
+  kable(dec_freq_tab, digits=3, col.names=c("Outcome","Rel. frequency"), caption = 'Decision Freq.') %>% print
+  cat('\n\n')
+
+  
+  ### Power
+  out_tab[[r_id]]$power_tab <- 
+  power_tab <- c("Power F"=mean(tmp$signif_F),"Power S"=mean(tmp$signif_S),
+                 "Power (F or S)"=mean(tmp$signif_F_or_S),"Power (F and S)"=mean(tmp$signif_F_and_S))
+  kable(power_tab,digits=3,col.names=c("Power"), caption='Power') %>% print
+  cat('\n\n')
+  
+  ### Conditional power
+  out_tab[[r_id]]$go_power_tab <- 
+  go_power_tab <- c("CP F if only F included in stage 2"=mean(tmp$signif_F[tmp$stage1_decision%in%c('4- Continue to stage 2: F only')]),
+                    
+                    "CP S if only S included in stage 2"=mean(tmp$signif_S[tmp$stage1_decision%in%c('3- Continue to stage 2: S only')]),
+                    
+                    "CP (F or S) \n if F and S continue to stage 2"=mean(tmp$signif_F_or_S[tmp$stage1_decision%in%c('5- Continue to stage 2: F and S')])
+                    )  
+  kable(go_power_tab,digits=2,col.names=c("Conditional Power"), caption='Conditional Power') %>% print
+  cat('\n\n')
+  
+ 
+} # end of for (r_id in 1:length(res))
+
+```
+
+

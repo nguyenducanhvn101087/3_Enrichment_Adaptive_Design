@@ -1,0 +1,171 @@
+---
+title: "MDD calculations"
+author: "Marcel Wolbers"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Minimal detectable difference for the IMpassion031 trial
+
+```{r }
+# R functions for MDD calculation 
+
+pvalueSignedChisqStat <- function(n1,n2,pi1,pi2,adjust=FALSE,directionUpper=FALSE){
+  # calculate p-value of a one-sided (signed) chi-squared statististics
+  # n1, n2:   sample size of the intervention and control arm
+  # pi1, pi2: observed proportion in the intervention arm (pi1) and the control arm (pi2)
+  # adjust:   If TRUE the p-value is "multiplicity-adjusted" by doubling it
+  # directionUpper: If FALSE, alternative hypothesis is pi1-pi2<0, if TRUE, alternative is pi1-pi2>0
+  X <- matrix(c(n1*pi1,n1*(1-pi1),n2*pi2,n2*(1-pi2)),ncol=2)
+  n <- n1+n2
+  sr <- rowSums(X)
+  sc <- colSums(X)
+  E <- outer(sr, sc, "*")/n
+  chisqStat <- sum((X-E)^2/E)
+  # Z score
+  Z <- sqrt(chisqStat)
+  # determine sign of Z-score
+  if (((directionUpper==F)&(pi1>pi2))|((directionUpper==T)&(pi1<pi2))) {
+    Z <- -Z # reverse sign, i.e. effect in the wrong direction
+  }
+  pvalue <- ifelse(adjust,2*(1-pnorm(Z)),1-pnorm(Z))
+  pvalue
+}
+
+binaryMDDsingleStage <- function(n1,n2,pi2,adjust=FALSE,alpha=0.025,directionUpper=FALSE){
+  # calculate MDD, i.e. the pi1 that would "just" lead to a significant signed 
+  # chi-square test at the one-sided significance level
+  # n1, n2:   sample size of the intervention arm (n1) and the control arm (n2)
+  # pi2:      observed proportion in the control arm
+  # adjust:   If TRUE, the p-value is "multiplicity-adjusted" by doubling it
+  # alpha:    Significance level
+  # directionUpper: If FALSE, alternative hypothesis is pi1-pi2<0, if TRUE, alternative is pi1-pi2>0
+  f <- function(pi1){
+    pvalueSignedChisqStat(n1,n2,pi1,pi2,adjust=adjust,directionUpper=directionUpper)-alpha
+  }  
+  if (directionUpper==TRUE){
+    pi1 <- uniroot(f,lower=pi2,upper=1,tol=.Machine$double.eps^0.5)$root
+  }
+  if (directionUpper==FALSE) {
+    pi1 <- uniroot(f,lower=0,upper=pi2,tol=.Machine$double.eps^0.5)$root
+  }
+  pi1-pi2 # difference to pi2
+}
+
+binaryMDDtwoStage <- function(n11,n12,n21,n22,pi2,weight1,weight2,adjust1=FALSE,adjust2=FALSE, 
+                              alpha=0.025,directionUpper=FALSE){
+  # calculate MDD, i.e. the pi1 that would "just" lead to a significant two-stage combination test
+  # n[ij]:      Stage i (i=1 or 2) sample size  for group j (1=intervetion, 2=control) 
+  # pi2:        Assumed observed proportion in control in both stages (in both stages)
+  # weight[i]:  Weight for stage i in p-value combination test
+  # adjust[i]:  If TRUE, the p-value for stage i is "multiplicity-adjusted" by doubling it
+  # alpha:      Significance level
+  # directionUpper: If FALSE, alternative hypothesis is pi1-pi2<0, if TRUE, alternative is pi1-pi2>0
+  if (all.equal(weight1^2+weight2^2,1)==FALSE) stop("weight1^2+weight2^2 must be 1.")
+  f <- function(pi1){
+    combination_Z <- weight1*qnorm(1-pvalueSignedChisqStat(n11,n12,pi1,pi2,adjust1,directionUpper))+
+                     weight2*qnorm(1-pvalueSignedChisqStat(n21,n22,pi1,pi2,adjust2,directionUpper))
+    (1-pnorm(combination_Z))-alpha
+  }
+  if (directionUpper==TRUE){
+    pi1 <- uniroot(f,lower=pi2,upper=1,tol=.Machine$double.eps^0.5)$root
+  }
+  if (directionUpper==FALSE) {
+    pi1 <- uniroot(f,lower=0,upper=pi2,tol=.Machine$double.eps^0.5)$root
+  }
+  pi1-pi2 # difference to pi2
+}
+```
+
+
+```{r }
+#--- Definitions for ImPassion031
+n11 <- n12 <- 204/2  # Sample size stage 1 full population
+n21 <- n22 <- 120/2  # Sample size stage 2 (largest selected population)
+prevalance_S <- 0.47 # Prevalence of subgroup S
+pi2 <- 0.48 * .95          # PCR under control accounting for 5% drop-outs
+
+weight1 <- sqrt(n11/(n11+n21))
+weight2 <- sqrt(n21/(n11+n21))
+
+alpha <- 0.025      # overall signicicance level
+alpha1 <- alpha/2   # local significance level after stage 1 
+
+# calculate local significance level for combination test after stage 2
+library(rpact)
+( alpha2 <- getDesignInverseNormal(informationRates = c(weight1^2,1), typeOfDesign ="asUser",
+                                   userAlphaSpending = c(alpha1,alpha),alpha=alpha)$stageLevels[2] )
+
+###------- **** Calculate MDD after stage 1 ****
+
+## For S (conservative)
+binaryMDDsingleStage(n1=n11*prevalance_S,n2=n12*prevalance_S,pi2=pi2,
+                     adjust=TRUE,alpha=alpha1,directionUpper=TRUE)
+
+## For S (liberal)
+binaryMDDsingleStage(n1=n11*prevalance_S,n2=n12*prevalance_S,pi2=pi2,
+                     adjust=FALSE,alpha=alpha1,directionUpper=TRUE)
+
+## For F (conservative)
+binaryMDDsingleStage(n1=n11,n2=n12,pi2=pi2,adjust=TRUE,alpha=alpha1,directionUpper=TRUE)
+
+## For F (liberal)
+binaryMDDsingleStage(n1=n11,n2=n12,pi2=pi2,adjust=FALSE,alpha=alpha1,directionUpper=TRUE)
+
+###------- **** Calculate MDD after stage 2 assuming only S continues to stage 2 ****
+binaryMDDtwoStage(n11=n11*prevalance_S,n12=n12*prevalance_S,
+                  n21=n21,n22=n22, # all patients in stage 2 are from S
+                  pi2=pi2,
+                  weight1=weight1,weight2=weight2,
+                  adjust1=TRUE,adjust2=FALSE, 
+                  alpha=alpha2,directionUpper=TRUE)
+
+###------- **** Calculate MDD after stage 2 assuming only F continues to stage 2 ****
+binaryMDDtwoStage(n11=n11,n12=n12,
+                  n21=n21,n22=n22, 
+                  pi2=pi2,
+                  weight1=weight1,weight2=weight2,
+                  adjust1=TRUE,adjust2=FALSE, 
+                  alpha=alpha2,directionUpper=TRUE)
+
+###------- **** Calculate MDD after stage 2 assuming F and S continues to stage 2 ****
+
+## For S (conservative)
+binaryMDDtwoStage(n11=n11*prevalance_S,n12=n12*prevalance_S,
+                  n21=n21*prevalance_S,n22=n22*prevalance_S, 
+                  pi2=pi2,
+                  weight1=weight1,weight2=weight2,
+                  adjust1=TRUE,adjust2=TRUE, 
+                  alpha=alpha2,directionUpper=TRUE)
+
+## For S (liberal)
+binaryMDDtwoStage(n11=n11*prevalance_S,n12=n12*prevalance_S,
+                  n21=n21*prevalance_S,n22=n22*prevalance_S, 
+                  pi2=pi2,
+                  weight1=weight1,weight2=weight2,
+                  adjust1=FALSE,adjust2=FALSE, 
+                  alpha=alpha2,directionUpper=TRUE)
+
+## For F (conservative)
+binaryMDDtwoStage(n11=n11,n12=n12,
+                  n21=n21,n22=n22, 
+                  pi2=pi2,
+                  weight1=weight1,weight2=weight2,
+                  adjust1=TRUE,adjust2=TRUE, 
+                  alpha=alpha2,directionUpper=TRUE)
+
+## For F (liberal)
+binaryMDDtwoStage(n11=n11,n12=n12,
+                  n21=n21,n22=n22, 
+                  pi2=pi2,
+                  weight1=weight1,weight2=weight2,
+                  adjust1=FALSE,adjust2=FALSE, 
+                  alpha=alpha2,directionUpper=TRUE)
+``` 
+
